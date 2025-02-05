@@ -257,10 +257,23 @@ impl From<crossterm::event::Event> for Event {
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 state: _,
+            })
+            | Event::Key(KeyEvent {
+                code: KeyCode::Char('K'),
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+                state: _,
             }) => Self::FocusPrevSameKind,
+
             Event::Key(KeyEvent {
                 code: KeyCode::PageDown,
                 modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: _,
+            })
+            | Event::Key(KeyEvent {
+                code: KeyCode::Char('J'),
+                modifiers: KeyModifiers::SHIFT,
                 kind: KeyEventKind::Press,
                 state: _,
             }) => Self::FocusNextSameKind,
@@ -823,11 +836,13 @@ impl<'state, 'input> Recorder<'state, 'input> {
                             event: Event::FocusNext,
                         },
                         MenuItem {
-                            label: Cow::Borrowed("Previous item of the same kind (page-up)"),
+                            label: Cow::Borrowed(
+                                "Previous item of the same kind (page-up, shift-k)",
+                            ),
                             event: Event::FocusPrevSameKind,
                         },
                         MenuItem {
-                            label: Cow::Borrowed("Next item of the same kind (page-down)"),
+                            label: Cow::Borrowed("Next item of the same kind (page-down, shift-j)"),
                             event: Event::FocusNextSameKind,
                         },
                         MenuItem {

@@ -20,6 +20,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, EnterAlternateScreen,
     LeaveAlternateScreen,
 };
+use either::Either;
 use ratatui::backend::{Backend, TestBackend};
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
@@ -77,6 +78,13 @@ enum SelectionKey {
 impl Default for SelectionKey {
     fn default() -> Self {
         Self::None
+    }
+}
+
+impl SelectionKey {
+    // Map a SelectionKey to an ordered level number, with greater values being more specific.
+    fn kind(&self) -> usize {
+        unsafe { std::mem::transmute(std::mem::discriminant(self)) }
     }
 }
 
@@ -453,12 +461,23 @@ enum CommitViewMode {
     Adjacent,
 }
 
+pub struct Prefs {
+    wrap: bool,
+}
+
+impl Prefs {
+    pub fn default() -> Self {
+        Self { wrap: false }
+    }
+}
+
 /// UI component to record the user's changes.
 pub struct Recorder<'state, 'input> {
     state: RecordState<'state>,
     input: &'input mut dyn RecordInput,
     pending_events: Vec<Event>,
     use_unicode: bool,
+    prefs: Prefs,
     commit_view_mode: CommitViewMode,
     expanded_items: HashSet<SelectionKey>,
     expanded_menu_idx: Option<usize>,
@@ -485,6 +504,7 @@ impl<'state, 'input> Recorder<'state, 'input> {
             input,
             pending_events: Default::default(),
             use_unicode: true,
+            prefs: Prefs::default(),
             commit_view_mode: CommitViewMode::Inline,
             expanded_items: Default::default(),
             expanded_menu_idx: Default::default(),
@@ -1389,8 +1409,12 @@ impl<'state, 'input> Recorder<'state, 'input> {
             Some(index) => match index.checked_sub(1) {
                 Some(index) => keys[index],
                 None => {
-                    // TODO: this behavior will be wrong if we have keys for each `Commit` (which currently isn't the case).
-                    *keys.last().unwrap()
+                    if self.prefs.wrap {
+                        // TODO: this behavior will be wrong if we have keys for each `Commit` (which currently isn't the case).
+                        *keys.last().unwrap()
+                    } else {
+                        keys[index]
+                    }
                 }
             },
         }
@@ -1401,7 +1425,13 @@ impl<'state, 'input> Recorder<'state, 'input> {
             None => self.first_selection_key(),
             Some(index) => match keys.get(index + 1) {
                 Some(key) => *key,
-                None => keys[0],
+                None => {
+                    if self.prefs.wrap {
+                        keys[0]
+                    } else {
+                        keys[index]
+                    }
+                }
             },
         }
     }
@@ -1412,25 +1442,35 @@ impl<'state, 'input> Recorder<'state, 'input> {
     // is returned. Otherwise, the next key is returned.
     fn select_prev_or_next_of_same_kind(&self, select_previous: bool) -> SelectionKey {
         let (keys, index) = self.find_selection();
-        let iterate_keys_with_wrap_around = |i| -> Box<dyn DoubleEndedIterator<Item = _>> {
-            let forward_iter = keys[i + 1..] // Skip the current key
-                .iter()
-                .chain(keys[..i].iter());
-            if select_previous {
-                Box::new(forward_iter.rev())
-            } else {
-                Box::new(forward_iter)
-            }
+        if index.is_none() {
+            return self.first_selection_key();
         };
-        match index {
-            None => self.first_selection_key(),
-            Some(index) => {
-                match iterate_keys_with_wrap_around(index)
-                    .find(|k| std::mem::discriminant(*k) == std::mem::discriminant(&keys[index]))
-                {
-                    None => keys[index],
-                    Some(key) => *key,
-                }
+        let index = index.unwrap();
+
+        let initial = keys.get(..index).unwrap_or(&[]).iter();
+        let remainder = keys.get(index + 1..).unwrap_or(&[]).iter();
+
+        let kind = keys[index].kind();
+        if self.prefs.wrap {
+            let mut iterate_keys = match select_previous {
+                false => Either::Left(remainder.chain(initial)),
+                true => Either::Right(initial.rev().chain(remainder.rev())),
+            };
+            match iterate_keys.find(|k| (*k).kind() == kind) {
+                None => keys[index],
+                Some(key) => *key,
+            }
+        } else {
+            let iterate_keys = match select_previous {
+                false => Either::Left(remainder),
+                true => Either::Right(initial.rev()),
+            };
+            match iterate_keys
+                .take_while(|k| (*k).kind() >= kind)
+                .find(|k| (*k).kind() == kind)
+            {
+                None => keys[index],
+                Some(found) => *found,
             }
         }
     }

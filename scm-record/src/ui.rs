@@ -148,6 +148,7 @@ pub enum Event {
     },
     ToggleItem,
     ToggleItemAndAdvance,
+    ToggleItemAndPrev,
     ToggleAll,
     ToggleAllUniform,
     ExpandItem,
@@ -311,7 +312,20 @@ impl From<crossterm::event::Event> for Event {
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 state: _,
+            })
+            | Event::Key(KeyEvent {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+                state: _,
             }) => Self::ToggleItemAndAdvance,
+
+            Event::Key(KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+                state: _,
+            }) => Self::ToggleItemAndPrev,
 
             Event::Key(KeyEvent {
                 code: KeyCode::Char('a'),
@@ -780,8 +794,12 @@ impl<'state, 'input> Recorder<'state, 'input> {
                             event: Event::ToggleItem,
                         },
                         MenuItem {
-                            label: Cow::Borrowed("Toggle current and advance (enter)"),
+                            label: Cow::Borrowed("Toggle current and advance (enter, shift-down)"),
                             event: Event::ToggleItemAndAdvance,
+                        },
+                        MenuItem {
+                            label: Cow::Borrowed("Toggle current and go to previous (shift-up)"),
+                            event: Event::ToggleItemAndPrev,
                         },
                         MenuItem {
                             label: Cow::Borrowed("Invert all items (a)"),
@@ -1086,7 +1104,8 @@ impl<'state, 'input> Recorder<'state, 'input> {
                 | Event::QuitEscape
                 | Event::QuitCancel
                 | Event::ToggleItem
-                | Event::ToggleItemAndAdvance,
+                | Event::ToggleItemAndAdvance
+                | Event::ToggleItemAndPrev,
             ) if self.help_dialog.is_some() => {
                 // there is only one button in the help dialog, so 'toggle*' means "click close"
                 StateUpdate::SetHelpDialog(None)
@@ -1131,7 +1150,10 @@ impl<'state, 'input> Recorder<'state, 'input> {
                 }))
             }
             // Press the appropriate dialog button.
-            (Some(quit_dialog), Event::ToggleItem | Event::ToggleItemAndAdvance) => {
+            (
+                Some(quit_dialog),
+                Event::ToggleItem | Event::ToggleItemAndAdvance | Event::ToggleItemAndPrev,
+            ) => {
                 let QuitDialog {
                     num_commit_messages: _,
                     num_changed_files: _,
@@ -1236,8 +1258,12 @@ impl<'state, 'input> Recorder<'state, 'input> {
             }
             (None, Event::ToggleItem) => StateUpdate::ToggleItem(self.selection_key),
             (None, Event::ToggleItemAndAdvance) => {
-                let advanced_key = self.advance_to_next_of_kind();
-                StateUpdate::ToggleItemAndAdvance(self.selection_key, advanced_key)
+                let next_key = self.go_to_next_of_kind();
+                StateUpdate::ToggleItemAndAdvance(self.selection_key, next_key)
+            }
+            (None, Event::ToggleItemAndPrev) => {
+                let prev_key = self.go_to_prev_of_kind();
+                StateUpdate::ToggleItemAndAdvance(self.selection_key, prev_key)
             }
             (None, Event::ToggleAll) => StateUpdate::ToggleAll,
             (None, Event::ToggleAllUniform) => StateUpdate::ToggleAllUniform,
@@ -1598,14 +1624,9 @@ impl<'state, 'input> Recorder<'state, 'input> {
         }
     }
 
-    fn advance_to_next_of_kind(&self) -> SelectionKey {
-        let (keys, index) = self.find_selection();
-        let index = match index {
-            Some(index) => index,
-            None => return SelectionKey::None,
-        };
+    fn advance_to_index(&self, keys: Vec<SelectionKey>, skip: usize) -> SelectionKey {
         keys.iter()
-            .skip(index + 1)
+            .skip(skip)
             .copied()
             .find(|key| match (self.selection_key, key) {
                 (SelectionKey::None, _)
@@ -1626,6 +1647,24 @@ impl<'state, 'input> Recorder<'state, 'input> {
                 ) => false,
             })
             .unwrap_or(self.selection_key)
+    }
+
+    fn go_to_next_of_kind(&self) -> SelectionKey {
+        let (keys, index) = self.find_selection();
+        let index = match index {
+            Some(index) => index,
+            None => return SelectionKey::None,
+        };
+        self.advance_to_index(keys, index + 1)
+    }
+
+    fn go_to_prev_of_kind(&self) -> SelectionKey {
+        let (keys, index) = self.find_selection();
+        let index = match index {
+            Some(index) => index,
+            None => return SelectionKey::None,
+        };
+        self.advance_to_index(keys, if index > 0 { index - 1 } else { 0 })
     }
 
     fn selection_key_y(
